@@ -9,28 +9,46 @@ Profile a GPU workload to identify idle GPU gaps and host-to-device data transfe
 ---
 
 ## 2. Repository Structure
-* `gpu_workload.py` — Runs the workload in `--mode baseline` (pageable memory, single stream, blocking copies) and `--mode optimized` (pinned memory, `copy_s` + `comp_s` CUDA streams, double buffering).
-* `analyze_trace.py` — Parses PyTorch Chrome trace JSON files (`trace_baseline.json`, `trace_optimized.json`) to calculate kernel busy time, GPU utilization %, copy overlap, and idle gaps > 50 µs.
+* `gpu_workload.py` — Runs the workload in `--mode baseline` and `--mode optimized`.
+* `analyze_trace.py` — Parses PyTorch Chrome trace JSON files to calculate kernel busy time, GPU utilization %, copy overlap, and idle gaps > 50 µs.
 * `smi_baseline.csv` / `smi_optimized.csv` — Live `nvidia-smi` GPU utilization and memory logs.
-* `images/` — Perfetto timeline screenshots (`baseline_timeline.png` and `optimized_timeline.png`).
+* `screenchots/` — Terminal execution and Perfetto timeline screenshots.
 
 ---
 
-## 3. Timeline Visualization (Before vs. After)
+## 3. Setup & Execution Screenshots
+
+### CUDA & PyTorch Environment Setup
+![CUDA and PyTorch Setup](screenchots/cuda%20and%20pytorch%20setup.png)
+
+### Workload Execution & Output (`gpu_workload.py`)
+![GPU Workload Execution](screenchots/gpu%20workload.png)
+![GPU Workload Output](screenchots/gpu%20workload%20ouput.png)
+
+### Trace Analyzer Output (`analyze_trace.py`)
+![Baseline Trace Analyzer Output](screenchots/trace_baselion_output.png)
+![Optimized Trace Analyzer Output](screenchots/trace%20optimised_output.png)
+![Combined Trace Summary](screenchots/analyze%20trace.png)
+
+---
+
+## 4. Perfetto Timeline Visualization (Before vs. After)
 
 ### Before Optimization (`trace_baseline.json`)
-Host-to-device transfers (`Memcpy HtoD`) from pageable memory and GPU kernels execute strictly serially on the default stream. While data transfers run, compute units sit idle, creating **9 idle gaps totaling 44.81 ms** across 10 profiled batches (`0.00 ms` overlap).
+Host-to-device transfers (`Memcpy HtoD`) from pageable memory and GPU kernels execute strictly serially on the default stream, leaving **9 idle gaps totaling 44.81 ms** across 10 profiled batches (`0.00 ms` overlap).
 
-![Baseline Timeline showing serial copy and compute with idle GPU gaps](screenchots/ui_trace baselion_after.png)
+![Baseline Perfetto Timeline Overview](screenchots/UI_trace_baseline_output.png)
+![Baseline Perfetto Timeline Zoomed with Idle Gaps](screenchots/ui_trace%20baselion_after.png)
 
 ### After Optimization (`trace_optimized.json`)
-Using `.pin_memory()` with two CUDA streams (`copy_s` and `comp_s`) and double buffering (`buf[0]`, `buf[1]`), the transfer of batch $i+1$ overlaps concurrently with the kernel execution of batch $i$, hiding **22.67 ms** of copy time behind compute and shrinking idle gaps to **0.59 ms**.
+Using `.pin_memory()` with two CUDA streams (`copy_s` and `comp_s`) and double buffering, the transfer of batch $i+1$ overlaps concurrently with the kernel execution of batch $i$, hiding **22.67 ms** of copy time behind compute and shrinking idle gaps to **0.59 ms**.
 
-![Optimized Timeline showing overlapping copy and compute streams](screenchots/ui_optimised_after.png)
+![Optimized Perfetto Timeline Overview](screenchots/Ui_trace%20optimised_output.png)
+![Optimized Perfetto Timeline Zoomed with Overlap](screenchots/ui_optimised_after.png)
 
 ---
 
-## 4. Results & Performance Comparison
+## 5. Results & Performance Comparison
 
 ### Table 1: GPU Utilization and Run Time (200 Batches, 67 MB/Batch)
 
@@ -65,7 +83,9 @@ $$\text{Ridge Point} = \frac{\text{Peak FP32 FLOP/s}}{\text{Peak Memory Bandwidt
 
 ---
 
-## 5. Bottlenecks Identified & Fixes Applied
+## 6. Bottlenecks Identified & Fixes Applied
+
+
 
 | # | Bottleneck Found (Evidence) | Fix Applied | Result |
 | :---: | :--- | :--- | :--- |
@@ -74,15 +94,27 @@ $$\text{Ridge Point} = \frac{\text{Peak FP32 FLOP/s}}{\text{Peak Memory Bandwidt
 | **3** | **Blocking `.cpu()` synchronization per batch:** Host waited for D2H completion on every batch before queuing the next batch. | Replaced per-batch `.cpu()` with `out_host[i].copy_(r, non_blocking=True)` and a single `torch.cuda.synchronize()` at the end. | Total runtime for 200 batches dropped from **`2.319 s` to `1.508 s`** (**1.54x speedup**). |
 | **4** | **Unfused memory-bound element-wise kernels:** ReLU, `mul_`, and `add_` spent `32.62 ms` (~44% of kernel time) repeatedly reading/writing the 67 MB tensor. | Noted as further work (kernel fusion via `torch.compile`). | Identified for future optimization. |
 
----
 
-## 6. How to Run
-```bash
-# 1. Run and profile baseline
-python gpu_workload.py --mode baseline --profile
+## 2. Repository Structure
 
-# 2. Run and profile optimized version
-python gpu_workload.py --mode optimized --profile
-
-# 3. Compare profiler traces
-python analyze_trace.py trace_baseline.json trace_optimized.json
+```text
+PGC-Experiment-07_Profiling-_and_GPU_Utilization/
+├── screenchots/
+│   ├── UI_trace_baseline_output.png
+│   ├── Ui_trace optimised_output.png
+│   ├── analyze trace.png
+│   ├── cuda and pytorch setup.png
+│   ├── gpu workload ouput.png
+│   ├── gpu workload.png
+│   ├── readme.md
+│   ├── trace optimised_output.png
+│   ├── trace_baselion_output.png
+│   ├── ui_optimised_after.png
+│   └── ui_trace baselion_after.png
+├── README.md
+├── analyze_trace.py
+├── gpu_workload.py
+├── smi_baseline.csv
+├── smi_optimized.csv
+├── trace_baseline.json
+└── trace_optimized.json
